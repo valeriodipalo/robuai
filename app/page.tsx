@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { getDeviceId } from "@/lib/device";
 import type {
+  Comment,
   Match,
   Message,
   Profile,
   ReplyResponse,
+  Upload,
   VoiceId,
 } from "@/lib/types";
 import Onboarding, { type OnboardingValues } from "@/components/Onboarding";
@@ -46,6 +48,8 @@ export default function Page() {
   const [matchesLoading, setMatchesLoading] = useState(false);
   const [threadMatch, setThreadMatch] = useState<Match | null>(null);
   const [threadMessages, setThreadMessages] = useState<Message[]>([]);
+  const [threadUploads, setThreadUploads] = useState<Upload[]>([]);
+  const [threadComments, setThreadComments] = useState<Comment[]>([]);
   const [threadLoading, setThreadLoading] = useState(false);
 
   // ui
@@ -193,7 +197,11 @@ export default function Page() {
             } catch {
               continue;
             }
-            if (ev.type === "delta") {
+            if (ev.type === "conversation") {
+              // Conversation + screenshot are now stored; mark it active before
+              // the first reply token arrives.
+              if (ev.matchId) setActiveMatchId(ev.matchId);
+            } else if (ev.type === "delta") {
               acc += ev.text ?? "";
               if (firstToken) {
                 firstToken = false;
@@ -219,6 +227,8 @@ export default function Page() {
                 why: ev.why ?? "",
                 matchId: ev.matchId ?? "",
                 turnId: ev.turnId,
+                suggestionMessageId: ev.suggestionMessageId,
+                uploadId: ev.uploadId,
                 options: [{ reply: ev.reply ?? "", why: ev.why ?? "" }],
               });
               if (ev.matchId) setActiveMatchId(ev.matchId);
@@ -306,25 +316,59 @@ export default function Page() {
     }
   }, [deviceId]);
 
+  const loadThreadData = useCallback(async (id: string) => {
+    const res = await fetch(`/api/matches/${id}`);
+    const data = res.ok
+      ? ((await res.json()) as {
+          match: Match | null;
+          messages: Message[];
+          uploads: Upload[];
+          comments: Comment[];
+        })
+      : { match: null, messages: [], uploads: [], comments: [] };
+    setThreadMatch(data.match);
+    setThreadMessages(data.messages ?? []);
+    setThreadUploads(data.uploads ?? []);
+    setThreadComments(data.comments ?? []);
+  }, []);
+
   async function openThread(id: string) {
     setView("thread");
     setThreadLoading(true);
     setThreadMatch(null);
     setThreadMessages([]);
+    setThreadUploads([]);
+    setThreadComments([]);
     try {
-      const res = await fetch(`/api/matches/${id}`);
-      const data = res.ok
-        ? ((await res.json()) as { match: Match | null; messages: Message[] })
-        : { match: null, messages: [] };
-      setThreadMatch(data.match);
-      setThreadMessages(data.messages ?? []);
+      await loadThreadData(id);
     } catch {
       setThreadMatch(null);
       setThreadMessages([]);
+      setThreadUploads([]);
+      setThreadComments([]);
     } finally {
       setThreadLoading(false);
     }
   }
+
+  // ── add a free-text comment (message-level or whole-conversation) ─
+  const addComment = useCallback(
+    async (matchId: string, body: string, messageId?: string | null) => {
+      const text = body.trim();
+      if (!text) return;
+      try {
+        await fetch("/api/comments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId, matchId, body: text, messageId: messageId ?? null }),
+        });
+        await loadThreadData(matchId);
+      } catch {
+        // best-effort; ignore failures
+      }
+    },
+    [deviceId, loadThreadData],
+  );
 
   // ── navigation helpers ───────────────────────────────────────────
   function goNew(keepMatch = false) {
@@ -441,12 +485,15 @@ export default function Page() {
         <Thread
           match={threadMatch}
           messages={threadMessages}
+          uploads={threadUploads}
+          comments={threadComments}
           loading={threadLoading}
           onBack={() => {
             setView("history");
             loadMatches();
           }}
           onContinue={continueChat}
+          onComment={addComment}
         />
       )}
 

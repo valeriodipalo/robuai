@@ -76,6 +76,45 @@ export interface TranscriptLine {
   text: string;
 }
 
+/** One uploaded screenshot in a conversation. `signedUrl` is minted on read (never stored). */
+export interface Upload {
+  id: string;
+  match_id: string;
+  device_id: string;
+  turn_id: string | null;
+  storage_path: string;
+  content_type: string;
+  byte_size: number | null;
+  width: number | null;
+  height: number | null;
+  created_at: string;
+  /** Short-lived display URL, attached by the read API; absent in the DB. */
+  signedUrl?: string | null;
+}
+
+/** A free-text user comment. `message_id` null = a whole-conversation note. */
+export interface Comment {
+  id: string;
+  match_id: string;
+  device_id: string;
+  message_id: string | null;
+  turn_id: string | null;
+  option_index: number | null;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** POST /api/comments request body. */
+export interface CommentRequest {
+  deviceId: string;
+  matchId: string;
+  body: string;
+  messageId?: string | null;
+  turnId?: string | null;
+  optionIndex?: number | null;
+}
+
 /** Swipe judgment on an option: -1 = swiped left (rejected), +1 = swiped right / copied (liked). */
 export type FeedbackScore = -1 | 1;
 
@@ -95,6 +134,10 @@ export interface ReplyResponse extends ReplyResult {
   matchId: string;
   /** Turn id — used to record which option the user picks. */
   turnId?: string;
+  /** The thread message id for the primary suggestion — lets the UI comment on it. */
+  suggestionMessageId?: string | null;
+  /** Upload id for the screenshot stored at the start of this request. */
+  uploadId?: string | null;
   /** All swipeable options in display order (index 0 = the streamed primary). */
   options?: ReplyOption[];
 }

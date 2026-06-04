@@ -74,9 +74,49 @@ create table if not exists public.feedback (
 create index if not exists feedback_turn_idx on public.feedback (turn_id);
 create index if not exists feedback_device_idx on public.feedback (device_id, created_at desc);
 
+-- One row per uploaded screenshot. Created at the START of a reply request so
+-- the conversation + image are stored even if the AI call fails. The image
+-- itself lives in the private "screenshots" Storage bucket (path = storage_path);
+-- this row is only inserted after that upload succeeds. turn_id is back-linked
+-- once the turn exists, and is nulled (not cascaded) if the turn is deleted —
+-- the screenshot belongs to the conversation, not the turn.
+create table if not exists public.uploads (
+  id           uuid primary key default gen_random_uuid(),
+  match_id     uuid not null references public.matches (id) on delete cascade,
+  device_id    text not null,
+  turn_id      uuid references public.turns (id) on delete set null,
+  storage_path text not null,
+  content_type text not null default 'image/jpeg',
+  byte_size    integer,
+  width        integer,
+  height       integer,
+  created_at   timestamptz not null default now()
+);
+create index if not exists uploads_match_idx  on public.uploads (match_id, created_at);
+create index if not exists uploads_device_idx on public.uploads (device_id, created_at desc);
+
+-- Free-text user comments. message_id null = a whole-conversation note; set =
+-- a comment on that specific message (survives a suggestion->sent promotion,
+-- which is an in-place update). Distinct from feedback (the -1/+1 score).
+create table if not exists public.comments (
+  id           uuid primary key default gen_random_uuid(),
+  match_id     uuid not null references public.matches (id) on delete cascade,
+  device_id    text not null,
+  message_id   uuid references public.messages (id) on delete cascade,
+  turn_id      uuid references public.turns (id) on delete set null,
+  option_index integer check (option_index is null or option_index >= 0),
+  body         text not null,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create index if not exists comments_match_idx   on public.comments (match_id, created_at);
+create index if not exists comments_message_idx on public.comments (message_id);
+
 -- Lock the tables to server-only access.
 alter table public.profiles enable row level security;
 alter table public.matches  enable row level security;
 alter table public.messages enable row level security;
 alter table public.turns    enable row level security;
 alter table public.feedback enable row level security;
+alter table public.uploads  enable row level security;
+alter table public.comments enable row level security;

@@ -8,6 +8,7 @@ import {
 } from "@/lib/prompt";
 import { getVoice } from "@/lib/voices";
 import { supabaseAdmin, isSupabaseConfigured } from "@/lib/supabase";
+import { uploadScreenshot } from "@/lib/storage";
 import { Stage, Message, ReplyRequest, ReplyOption } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -83,6 +84,45 @@ export async function POST(request: Request) {
       const send = (obj: unknown) =>
         controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
 
+      // ── Start the conversation UP FRONT: create the match (if new) and store
+      //    the screenshot before the AI runs, so the conversation + image
+      //    survive even if the model call fails. Best-effort — never block the
+      //    reply on storage/match creation. ──
+      let matchId = body.matchId || "";
+      let uploadId = "";
+      if (configured) {
+        const db = supabaseAdmin();
+        try {
+          if (!body.matchId) {
+            const { data: ins } = await db
+              .from("matches")
+              .insert({ device_id: deviceId })
+              .select("id")
+              .single();
+            if (ins) matchId = ins.id as string;
+          }
+          if (matchId) {
+            const id = crypto.randomUUID();
+            const up = await uploadScreenshot({ deviceId, matchId, uploadId: id, dataUrl: imageDataUrl });
+            if (up) {
+              await db.from("uploads").insert({
+                id,
+                match_id: matchId,
+                device_id: deviceId,
+                storage_path: up.storagePath,
+                content_type: up.contentType,
+                byte_size: up.byteSize,
+              });
+              uploadId = id;
+            }
+          }
+        } catch {
+          // keep going — a stored conversation is best-effort, the reply is not
+        }
+      }
+      // First event: the client can mark the conversation active immediately.
+      send({ type: "conversation", matchId, uploadId });
+
       try {
         // ── Primary option: stream it live ─────────────────────────
         let raw = "";
@@ -94,35 +134,24 @@ export async function POST(request: Request) {
         const stage = coerceStage(primary.meta.stage);
         const reply0 = primary.reply;
 
-        // ── Persist the turn (match, her line, primary suggestion, turn) ──
-        let matchId = body.matchId || "";
+        // ── Persist the turn (her line, primary suggestion, turn) onto the
+        //    conversation created above. The match already exists, so we UPDATE
+        //    its name/snippet (name is only known now the model has read it). ──
         let turnId = "";
         let suggestionMsgId: string | null = null;
-        if (configured && reply0) {
+        if (configured && reply0 && matchId) {
           const db = supabaseAdmin();
           const now = new Date().toISOString();
-          if (!body.matchId) {
-            const { data: ins } = await db
-              .from("matches")
-              .insert({
-                device_id: deviceId,
-                name: primary.meta.matchName,
-                last_stage: stage,
-                last_snippet: reply0,
-              })
-              .select("id")
-              .single();
-            if (ins) matchId = ins.id as string;
-          } else {
+          {
             const update: Record<string, unknown> = {
               last_stage: stage,
               last_snippet: reply0,
               updated_at: now,
             };
             if (primary.meta.matchName) update.name = primary.meta.matchName;
-            await db.from("matches").update(update).eq("id", body.matchId);
+            await db.from("matches").update(update).eq("id", matchId);
           }
-          if (matchId) {
+          {
             // Explicit, monotonically increasing timestamps keep the seeded
             // back-and-forth in order (a batch insert shares one now()).
             const baseMs = Date.now();
@@ -189,6 +218,11 @@ export async function POST(request: Request) {
               .select("id")
               .single();
             if (turn) turnId = turn.id as string;
+            // Link the screenshot to the turn it produced (image still belongs
+            // to the conversation, so this is a back-reference, not ownership).
+            if (turnId && uploadId) {
+              await db.from("uploads").update({ turn_id: turnId }).eq("id", uploadId);
+            }
           }
         }
 
@@ -201,6 +235,8 @@ export async function POST(request: Request) {
           why: primary.meta.why,
           matchId,
           turnId,
+          suggestionMessageId: suggestionMsgId,
+          uploadId,
         });
 
         // ── Alternate options (different angles) for the swipe deck ──
@@ -222,7 +258,7 @@ export async function POST(request: Request) {
           await supabaseAdmin().from("turns").update({ options }).eq("id", turnId);
         }
 
-        send({ type: "done", options, matchId, turnId });
+        send({ type: "done", options, matchId, turnId, uploadId });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unexpected error.";
         send({ type: "error", error: message });
