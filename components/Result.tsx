@@ -33,27 +33,59 @@ export default function Result({
 }) {
   const [copied, setCopied] = useState(false);
   const [active, setActive] = useState(0);
-  const trackRef = useRef<HTMLDivElement>(null);
+  const [dragDx, setDragDx] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  // Refs hold live drag state so the move/up handlers read current values
+  // synchronously (React state would be stale within a single gesture).
+  const draggingRef = useRef(false);
+  const startX = useRef(0);
+  const dxRef = useRef(0);
   const voice = getVoice(voiceId);
 
   const live = !result;
   const options = result?.options?.length
     ? result.options
     : [{ reply: streamingReply || "", why: "" }];
-  const current = options[Math.min(active, options.length - 1)] ?? options[0];
+  const n = options.length;
+  const idx = Math.min(active, n - 1);
+  const current = options[idx] ?? options[0];
   const name = result?.matchName?.trim() || "New match";
 
-  function onScroll() {
-    const el = trackRef.current;
-    if (!el) return;
-    const i = Math.round(el.scrollLeft / el.clientWidth);
-    if (i !== active) setActive(i);
+  // Drag-to-swipe (pointer events → works with both touch and mouse).
+  function onPointerDown(e: React.PointerEvent) {
+    if (live || n <= 1) return;
+    draggingRef.current = true;
+    setDragging(true);
+    startX.current = e.clientX;
+    dxRef.current = 0;
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      // ignore — capture is a nicety, not required
+    }
+  }
+  function onPointerMove(e: React.PointerEvent) {
+    if (!draggingRef.current) return;
+    let dx = e.clientX - startX.current;
+    // resist past the first / last card
+    if ((idx === 0 && dx > 0) || (idx === n - 1 && dx < 0)) dx *= 0.3;
+    dxRef.current = dx;
+    setDragDx(dx);
+  }
+  function onPointerUp() {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    setDragging(false);
+    const dx = dxRef.current;
+    dxRef.current = 0;
+    const threshold = 48;
+    if (dx < -threshold && idx < n - 1) setActive(idx + 1);
+    else if (dx > threshold && idx > 0) setActive(idx - 1);
+    setDragDx(0);
   }
 
   function goTo(i: number) {
-    const el = trackRef.current;
-    if (!el) return;
-    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    setActive(i);
   }
 
   async function copy() {
@@ -133,43 +165,52 @@ export default function Result({
         <p className="mt-3 px-1 text-[12.5px] leading-[1.5] text-muted">{result.read}</p>
       )}
 
-      {/* swipeable deck of options */}
-      <div
-        ref={trackRef}
-        onScroll={onScroll}
-        className="mt-4 flex snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        style={{ scrollbarWidth: "none" }}
-      >
-        {options.map((opt, i) => (
-          <div key={i} className="w-full shrink-0 snap-center px-[1px]">
-            <div
-              className="rounded-[20px] p-[17px] shadow-[0_0_0_1.5px_rgba(255,106,91,.35),0_22px_46px_-26px_rgba(255,106,91,.5)]"
-              style={{
-                background:
-                  "linear-gradient(160deg,rgba(255,106,91,.14),rgba(255,174,92,.05))",
-              }}
-            >
-              <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[.1em] text-ember-2">
-                <span>✶ {live ? "Your move" : `Option ${i + 1}`}</span>
-                {!live && options.length > 1 && (
-                  <span className="text-faint">
-                    {i + 1}/{options.length}
-                  </span>
-                )}
-              </div>
-              <p className="mt-[11px] font-display text-[21px] font-medium leading-[1.34] tracking-[-.01em]">
-                {opt.reply}
-                {live && (
-                  <span className="ml-0.5 inline-block h-[18px] w-[2px] translate-y-[3px] animate-pulse bg-ember-1 align-middle" />
-                )}
-              </p>
-              <div className="mt-[13px] text-[11.5px] text-faint">
-                in your voice · {voice.name.replace(/^The /, "")}
-                {opt.why ? ` · ${opt.why}` : ""}
+      {/* swipeable deck of options (drag left/right — touch or mouse) */}
+      <div className="mt-4 overflow-hidden">
+        <div
+          className="flex select-none"
+          style={{
+            transform: `translateX(calc(${-idx * 100}% + ${dragDx}px))`,
+            transition: dragging ? "none" : "transform .32s cubic-bezier(.2,.8,.2,1)",
+            touchAction: "pan-y",
+            cursor: !live && n > 1 ? (dragging ? "grabbing" : "grab") : "default",
+          }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        >
+          {options.map((opt, i) => (
+            <div key={i} className="w-full shrink-0 px-[1px]">
+              <div
+                className="rounded-[20px] p-[17px] shadow-[0_0_0_1.5px_rgba(255,106,91,.35),0_22px_46px_-26px_rgba(255,106,91,.5)]"
+                style={{
+                  background:
+                    "linear-gradient(160deg,rgba(255,106,91,.14),rgba(255,174,92,.05))",
+                }}
+              >
+                <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[.1em] text-ember-2">
+                  <span>✶ {live ? "Your move" : `Option ${i + 1}`}</span>
+                  {!live && n > 1 && (
+                    <span className="text-faint">
+                      {i + 1}/{n}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-[11px] font-display text-[21px] font-medium leading-[1.34] tracking-[-.01em]">
+                  {opt.reply}
+                  {live && (
+                    <span className="ml-0.5 inline-block h-[18px] w-[2px] translate-y-[3px] animate-pulse bg-ember-1 align-middle" />
+                  )}
+                </p>
+                <div className="mt-[13px] text-[11.5px] text-faint">
+                  in your voice · {voice.name.replace(/^The /, "")}
+                  {opt.why ? ` · ${opt.why}` : ""}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* dots — swipe between options */}
@@ -182,7 +223,7 @@ export default function Result({
               onClick={() => goTo(i)}
               aria-label={`Option ${i + 1}`}
               className={`h-1.5 rounded-full transition-all ${
-                i === active ? "w-5 bg-ember-1" : "w-1.5 bg-white/25"
+                i === idx ? "w-5 bg-ember-1" : "w-1.5 bg-white/25"
               }`}
             />
           ))}
