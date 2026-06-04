@@ -267,6 +267,28 @@ export default function Page() {
     [deviceId],
   );
 
+  // ── record a swipe judgment on an option (-1 left / +1 right) ─────
+  const recordFeedback = useCallback(
+    async (
+      turnId: string,
+      matchId: string | null,
+      index: number,
+      reply: string,
+      score: -1 | 1,
+    ) => {
+      try {
+        await fetch("/api/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ turnId, matchId, index, reply, score, deviceId, source: "swipe" }),
+        });
+      } catch {
+        // best-effort signal; ignore failures
+      }
+    },
+    [deviceId],
+  );
+
   // ── history loading ──────────────────────────────────────────────
   const loadMatches = useCallback(async () => {
     if (!deviceId) return;
@@ -401,6 +423,7 @@ export default function Page() {
           onNew={() => goNew()}
           onBack={() => goNew()}
           onSelect={selectOption}
+          onFeedback={recordFeedback}
           regenerating={regenerating}
         />
       )}

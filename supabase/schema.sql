@@ -55,8 +55,28 @@ create table if not exists public.turns (
 );
 create index if not exists turns_match_idx on public.turns (match_id, created_at);
 
+-- Swipe feedback: one signed judgment per option per turn.
+-- score = -1 (swiped left / rejected) or +1 (swiped right or copied / liked).
+-- Upserted on (turn_id, option_index) so the user's latest judgment wins.
+create table if not exists public.feedback (
+  id           uuid primary key default gen_random_uuid(),
+  turn_id      uuid not null references public.turns (id) on delete cascade,
+  match_id     uuid references public.matches (id) on delete cascade,
+  device_id    text not null,
+  option_index integer not null,
+  reply        text,
+  score        integer not null check (score in (-1, 1)),
+  source       text not null default 'swipe' check (source in ('swipe', 'copy')),
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  unique (turn_id, option_index)
+);
+create index if not exists feedback_turn_idx on public.feedback (turn_id);
+create index if not exists feedback_device_idx on public.feedback (device_id, created_at desc);
+
 -- Lock the tables to server-only access.
 alter table public.profiles enable row level security;
 alter table public.matches  enable row level security;
 alter table public.messages enable row level security;
 alter table public.turns    enable row level security;
+alter table public.feedback enable row level security;

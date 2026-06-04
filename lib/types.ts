@@ -76,6 +76,20 @@ export interface TranscriptLine {
   text: string;
 }
 
+/** Swipe judgment on an option: -1 = swiped left (rejected), +1 = swiped right / copied (liked). */
+export type FeedbackScore = -1 | 1;
+
+/** POST /api/feedback request body. */
+export interface FeedbackRequest {
+  turnId: string;
+  matchId?: string | null;
+  index: number; // option index judged
+  reply?: string; // the option text, stored for offline tuning
+  score: FeedbackScore;
+  deviceId: string;
+  source?: "swipe" | "copy";
+}
+
 /** POST /api/reply response (the streamed `done` payload). */
 export interface ReplyResponse extends ReplyResult {
   matchId: string;

@@ -12,7 +12,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   if (!isSupabaseConfigured()) return NextResponse.json({ ok: true });
 
-  let body: { turnId?: string; index?: number };
+  let body: { turnId?: string; index?: number; deviceId?: string };
   try {
     body = await request.json();
   } catch {
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     const db = supabaseAdmin();
     const { data: turn } = await db
       .from("turns")
-      .select("id, options, suggestion_message_id, match_id")
+      .select("id, options, suggestion_message_id, match_id, device_id")
       .eq("id", turnId)
       .maybeSingle();
     if (!turn) return NextResponse.json({ error: "Turn not found." }, { status: 404 });
@@ -41,11 +41,13 @@ export async function POST(request: Request) {
       .update({ selected_index: index, selected_reply: chosen.reply })
       .eq("id", turnId);
 
-    // Realign memory: the suggestion he kept + the match snippet.
+    // Realign memory: promote the kept suggestion to a durable 'sent' message —
+    // a real record of what HE actually sent, not just a proposal — and update
+    // the match snippet.
     if (turn.suggestion_message_id) {
       await db
         .from("messages")
-        .update({ content: chosen.reply })
+        .update({ content: chosen.reply, role: "sent" })
         .eq("id", turn.suggestion_message_id);
     }
     if (turn.match_id) {
@@ -53,6 +55,24 @@ export async function POST(request: Request) {
         .from("matches")
         .update({ last_snippet: chosen.reply, updated_at: new Date().toISOString() })
         .eq("id", turn.match_id);
+    }
+
+    // Copying is the strongest positive signal: record +1 for the chosen option.
+    const deviceId = body.deviceId || (turn.device_id as string | null) || "";
+    if (deviceId) {
+      await db.from("feedback").upsert(
+        {
+          turn_id: turnId,
+          match_id: (turn.match_id as string | null) ?? null,
+          device_id: deviceId,
+          option_index: index,
+          reply: chosen.reply,
+          score: 1,
+          source: "copy",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "turn_id,option_index" },
+      );
     }
 
     return NextResponse.json({ ok: true });

@@ -1,13 +1,18 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReplyResponse, VoiceId } from "@/lib/types";
 import { getVoice } from "@/lib/voices";
 import { StatusBar, StageBadge, Avatar } from "./ui";
 
-// The reply moment. A horizontally swipeable deck of options (swipe left/right),
-// each in serif; the user copies the one he likes and we record the pick. While
-// the model streams the first option, it types out live with a caret.
+const TRANS = "transform .34s cubic-bezier(.2,.8,.2,1), opacity .34s";
+const THRESH = 90; // px to count as a swipe
+const VEL = 0.5; // px/ms flick velocity
+const DECK_H = 188; // uniform card height (Tinder-style), so cards stack cleanly
+
+// The reply moment, as a Tinder-style card stack. Drag the top card left/right;
+// past a threshold (or with a quick flick) it flings off and the next option is
+// revealed underneath. Swipe right or tap ↩ to go back. Copy records the pick.
 export default function Result({
   result,
   streaming,
@@ -18,6 +23,7 @@ export default function Result({
   onNew,
   onBack,
   onSelect,
+  onFeedback,
   regenerating,
 }: {
   result: ReplyResponse | null;
@@ -29,17 +35,21 @@ export default function Result({
   onNew: () => void;
   onBack: () => void;
   onSelect?: (turnId: string, index: number) => void;
+  onFeedback?: (
+    turnId: string,
+    matchId: string | null,
+    index: number,
+    reply: string,
+    score: -1 | 1,
+  ) => void;
   regenerating?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [active, setActive] = useState(0);
-  const [dragDx, setDragDx] = useState(0);
+  const [drag, setDrag] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
-  // Refs hold live drag state so the move/up handlers read current values
-  // synchronously (React state would be stale within a single gesture).
   const draggingRef = useRef(false);
-  const startX = useRef(0);
-  const dxRef = useRef(0);
+  const start = useRef({ x: 0, y: 0, t: 0 });
   const voice = getVoice(voiceId);
 
   const live = !result;
@@ -51,41 +61,89 @@ export default function Result({
   const current = options[idx] ?? options[0];
   const name = result?.matchName?.trim() || "New match";
 
-  // Drag-to-swipe (pointer events → works with both touch and mouse).
+  // If options shrink (regenerate), reset to the first card.
+  useEffect(() => {
+    if (active > n - 1) setActive(0);
+  }, [n, active]);
+
   function onPointerDown(e: React.PointerEvent) {
     if (live || n <= 1) return;
     draggingRef.current = true;
     setDragging(true);
-    startX.current = e.clientX;
-    dxRef.current = 0;
+    start.current = { x: e.clientX, y: e.clientY, t: performance.now() };
     try {
       e.currentTarget.setPointerCapture?.(e.pointerId);
     } catch {
-      // ignore — capture is a nicety, not required
+      /* capture is a nicety */
     }
   }
   function onPointerMove(e: React.PointerEvent) {
     if (!draggingRef.current) return;
-    let dx = e.clientX - startX.current;
-    // resist past the first / last card
-    if ((idx === 0 && dx > 0) || (idx === n - 1 && dx < 0)) dx *= 0.3;
-    dxRef.current = dx;
-    setDragDx(dx);
+    setDrag({ x: e.clientX - start.current.x, y: (e.clientY - start.current.y) * 0.5 });
   }
-  function onPointerUp() {
+  function judge(score: -1 | 1) {
+    if (result?.turnId && onFeedback) {
+      onFeedback(result.turnId, result.matchId ?? null, idx, current?.reply ?? "", score);
+    }
+  }
+  function onPointerUp(e: React.PointerEvent) {
     if (!draggingRef.current) return;
     draggingRef.current = false;
     setDragging(false);
-    const dx = dxRef.current;
-    dxRef.current = 0;
-    const threshold = 48;
-    if (dx < -threshold && idx < n - 1) setActive(idx + 1);
-    else if (dx > threshold && idx > 0) setActive(idx - 1);
-    setDragDx(0);
+    const dx = e.clientX - start.current.x;
+    const v = dx / Math.max(1, performance.now() - start.current.t);
+    setDrag({ x: 0, y: 0 });
+    // Left = reject (-1), right = like (+1). The swipe also navigates the deck.
+    if (dx < -THRESH || v < -VEL) {
+      judge(-1);
+      if (idx < n - 1) setActive(idx + 1);
+    } else if (dx > THRESH || v > VEL) {
+      judge(1);
+      if (idx > 0) setActive(idx - 1);
+    }
   }
 
-  function goTo(i: number) {
-    setActive(i);
+  function goBack() {
+    if (idx > 0) setActive(idx - 1);
+  }
+
+  function cardStyle(i: number): React.CSSProperties {
+    const delta = i - idx;
+    if (delta === 0) {
+      return {
+        transform: `translate(${drag.x}px, ${drag.y}px) rotate(${drag.x * 0.06}deg)`,
+        opacity: 1,
+        zIndex: 30,
+        transition: dragging ? "none" : TRANS,
+        touchAction: "pan-y",
+        cursor: !live && n > 1 ? (dragging ? "grabbing" : "grab") : "default",
+      };
+    }
+    if (delta < 0) {
+      return {
+        transform: "translateX(-140%) rotate(-14deg)",
+        opacity: 0,
+        zIndex: 10,
+        transition: TRANS,
+        pointerEvents: "none",
+      };
+    }
+    if (delta === 1) {
+      return {
+        transform: "translateY(12px) scale(.94)",
+        opacity: 0.55,
+        zIndex: 20,
+        transition: TRANS,
+        pointerEvents: "none",
+      };
+    }
+    return {
+      transform: "translateY(22px) scale(.9)",
+      opacity: 0,
+      zIndex: 5,
+      transition: TRANS,
+      pointerEvents: "none",
+    };
   }
 
   async function copy() {
@@ -118,11 +176,14 @@ export default function Result({
         ok = false;
       }
     }
-    // record which option he kept
-    if (result?.turnId && onSelect) onSelect(result.turnId, active);
+    if (result?.turnId && onSelect) onSelect(result.turnId, idx);
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   }
+
+  // direction hint while dragging
+  const hintNext = drag.x < -16 ? Math.min(1, -drag.x / 90) : 0;
+  const hintBack = drag.x > 16 && idx > 0 ? Math.min(1, drag.x / 90) : 0;
 
   return (
     <div className="flex min-h-[100dvh] flex-col px-1 pb-24 pt-4">
@@ -165,75 +226,100 @@ export default function Result({
         <p className="mt-3 px-1 text-[12.5px] leading-[1.5] text-muted">{result.read}</p>
       )}
 
-      {/* swipeable deck of options (drag left/right — touch or mouse) */}
-      <div className="mt-4 overflow-hidden">
-        <div
-          className="flex select-none"
-          style={{
-            transform: `translateX(calc(${-idx * 100}% + ${dragDx}px))`,
-            transition: dragging ? "none" : "transform .32s cubic-bezier(.2,.8,.2,1)",
-            touchAction: "pan-y",
-            cursor: !live && n > 1 ? (dragging ? "grabbing" : "grab") : "default",
-          }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-        >
-          {options.map((opt, i) => (
-            <div key={i} className="w-full shrink-0 px-[1px]">
-              <div
-                className="rounded-[20px] p-[17px] shadow-[0_0_0_1.5px_rgba(255,106,91,.35),0_22px_46px_-26px_rgba(255,106,91,.5)]"
-                style={{
-                  background:
-                    "linear-gradient(160deg,rgba(255,106,91,.14),rgba(255,174,92,.05))",
-                }}
-              >
-                <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[.1em] text-ember-2">
-                  <span>✶ {live ? "Your move" : `Option ${i + 1}`}</span>
-                  {!live && n > 1 && (
-                    <span className="text-faint">
-                      {i + 1}/{n}
-                    </span>
-                  )}
-                </div>
-                <p className="mt-[11px] font-display text-[21px] font-medium leading-[1.34] tracking-[-.01em]">
+      {/* Tinder-style card stack */}
+      <div className="relative mt-4" style={{ height: DECK_H }}>
+        {options.map((opt, i) => {
+          const isFront = i === idx;
+          return (
+            <div
+              key={i}
+              onPointerDown={isFront ? onPointerDown : undefined}
+              onPointerMove={isFront ? onPointerMove : undefined}
+              onPointerUp={isFront ? onPointerUp : undefined}
+              onPointerCancel={isFront ? onPointerUp : undefined}
+              className="absolute inset-x-0 top-0 flex select-none flex-col overflow-hidden rounded-[20px] p-[17px] shadow-[0_0_0_1.5px_rgba(255,106,91,.35),0_22px_46px_-26px_rgba(255,106,91,.5)]"
+              style={{
+                ...cardStyle(i),
+                height: DECK_H,
+                background:
+                  "linear-gradient(160deg,rgba(255,106,91,.16),rgba(255,174,92,.06)), #160f1d",
+              }}
+            >
+              {/* drag hints (only on the front card) */}
+              {isFront && (
+                <>
+                  <span
+                    className="pointer-events-none absolute right-3 top-3 rounded-full border border-ember-2/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ember-2"
+                    style={{ opacity: hintNext }}
+                  >
+                    next →
+                  </span>
+                  <span
+                    className="pointer-events-none absolute left-3 top-3 rounded-full border border-rose/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose"
+                    style={{ opacity: hintBack }}
+                  >
+                    ← back
+                  </span>
+                </>
+              )}
+              <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[.1em] text-ember-2">
+                <span>✶ {live ? "Your move" : `Option ${i + 1}`}</span>
+                {!live && n > 1 && (
+                  <span className="text-faint">
+                    {i + 1}/{n}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-1 items-center">
+                <p className="font-display text-[21px] font-medium leading-[1.34] tracking-[-.01em]">
                   {opt.reply}
                   {live && (
                     <span className="ml-0.5 inline-block h-[18px] w-[2px] translate-y-[3px] animate-pulse bg-ember-1 align-middle" />
                   )}
                 </p>
-                <div className="mt-[13px] text-[11.5px] text-faint">
-                  in your voice · {voice.name.replace(/^The /, "")}
-                  {opt.why ? ` · ${opt.why}` : ""}
-                </div>
+              </div>
+              <div className="text-[11.5px] text-faint">
+                in your voice · {voice.name.replace(/^The /, "")}
+                {opt.why ? ` · ${opt.why}` : ""}
               </div>
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
-      {/* dots — swipe between options */}
-      {!live && options.length > 1 && (
-        <div className="mt-3 flex items-center justify-center gap-1.5">
-          {options.map((_, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => goTo(i)}
-              aria-label={`Option ${i + 1}`}
-              className={`h-1.5 rounded-full transition-all ${
-                i === idx ? "w-5 bg-ember-1" : "w-1.5 bg-white/25"
-              }`}
-            />
-          ))}
-        </div>
-      )}
-      {!live && options.length > 1 && (
-        <p className="mt-2 text-center text-[11px] text-faint">swipe for other angles</p>
+      {/* dots + hint */}
+      {!live && n > 1 && (
+        <>
+          <div className="mt-3 flex items-center justify-center gap-1.5">
+            {options.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setActive(i)}
+                aria-label={`Option ${i + 1}`}
+                className={`h-1.5 rounded-full transition-all ${
+                  i === idx ? "w-5 bg-ember-1" : "w-1.5 bg-white/25"
+                }`}
+              />
+            ))}
+          </div>
+          <p className="mt-2 text-center text-[11px] text-faint">
+            swipe the card · ↩ to go back
+          </p>
+        </>
       )}
 
+      {/* actions: back · copy · regenerate */}
       <div className="mt-[14px] flex gap-[10px]">
+        <button
+          type="button"
+          onClick={goBack}
+          disabled={live || idx === 0}
+          className="ghost-btn grid w-[52px] place-items-center rounded-[16px] text-[17px] disabled:opacity-30"
+          aria-label="Go back to previous option"
+        >
+          ↩
+        </button>
         <button
           type="button"
           onClick={copy}

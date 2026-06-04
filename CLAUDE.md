@@ -16,7 +16,7 @@ A phone-first web app: a Tinder texting wingman. The user uploads a **screenshot
 app/            Next pages + API route handlers (reply, matches, profile)
 components/      UI for the 4 screens (Onboarding/Home/Result/History/Thread + ui atoms)
 lib/            types · voices · prompt · openrouter · supabase · device
-supabase/schema.sql   DB schema (profiles · matches · messages; RLS on, server-only)
+supabase/schema.sql   DB schema (profiles · matches · messages · turns · feedback; RLS on, server-only)
 design/mockup.html    Visual reference (the aesthetic is non-negotiable)
 docs/  SPEC · DECISIONS · DESIGN · MEMORY · SETUP
 ```
@@ -25,8 +25,9 @@ docs/  SPEC · DECISIONS · DESIGN · MEMORY · SETUP
 - **Types:** `lib/types.ts` is the source of truth. Key shapes: `ReplyRequest {imageDataUrl, voiceId, deviceId, matchId?}` → `ReplyResponse {stage, read, matchName, reply, why, matchId}`.
 - **Voices:** 3 starter tones in `lib/voices.ts` (`playful` / `direct` / `curious`); seeds the prompt, refined over use.
 - **Prompt = the product.** `lib/prompt.ts`: `buildSinglePrompt`/`buildSingleUser` (read + write, anti-AI-cringe, one short message) + `splitReplyMeta` (parses the streamed `<<<REPLY>>>`/`<<<META>>>` output, drops any preamble). Tune here, carefully.
-- **API:** `POST /api/reply` (streams `delta`→`primary`→`option`×N→`done`; AI + persist), `POST /api/select` (records the picked option), `GET/POST /api/profile`, `GET /api/matches`, `GET/DELETE /api/matches/[id]`.
-- **Options + record:** reply is a **swipeable deck of 3** (primary streamed + 2 alternates). Copied option recorded in `turns.selected_index`. Chat **transcript** the model read saved to `turns.transcript`. (`turns` table: options/transcript/selection per request.)
+- **API:** `POST /api/reply` (streams `delta`→`primary`→`option`×N→`done`; AI + persist), `POST /api/select` (records the picked option + promotes its message to `sent`), `POST /api/feedback` (upserts a swipe score), `GET/POST /api/profile`, `GET /api/matches`, `GET/DELETE /api/matches/[id]`.
+- **Options + record:** reply is a **swipeable deck of 3** (primary streamed + 2 alternates). Copied option recorded in `turns.selected_index` and its thread message promoted to `role='sent'` (durable record of what he sent). Chat **transcript** the model read saved to `turns.transcript`, and on a **new** match expanded into per-line `messages` (her→`them`, him→`sent`) so the full back-and-forth is stored. (`turns`: options/transcript/selection per request.)
+- **Swipe feedback:** each option card records a signed judgment — **left = −1, right = +1** — to `feedback` (one row per `(turn_id, option_index)`, upserted; `source` `swipe`|`copy`). Kept for voice tuning: which angles he rejects vs. keeps.
 
 ## Memory = "illusion of memory"
 Each chat = a `matches` row with a unique id. All turns are stored in `messages` (`them` / `suggestion` / `sent`). On each reply we **re-inject the full thread history** for that match id into the prompt (invisible to the user) so the model "remembers". M3's 1M context makes full history cheap. (Cadence may later batch every ~5 messages.)

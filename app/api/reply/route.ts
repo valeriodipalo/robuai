@@ -123,14 +123,56 @@ export async function POST(request: Request) {
             await db.from("matches").update(update).eq("id", body.matchId);
           }
           if (matchId) {
-            if (stage !== "opener" && primary.meta.read) {
+            // Explicit, monotonically increasing timestamps keep the seeded
+            // back-and-forth in order (a batch insert shares one now()).
+            const baseMs = Date.now();
+            const stamp = (i: number) => new Date(baseMs + i).toISOString();
+
+            if (!body.matchId) {
+              // New thread: seed the FULL conversation the model read from the
+              // screenshot — her lines as 'them', his prior lines as 'sent'.
+              const seed = (primary.meta.transcript ?? [])
+                .filter((t) => t.text)
+                .map((t, i) => ({
+                  match_id: matchId,
+                  role: t.from === "him" ? "sent" : "them",
+                  content: t.text,
+                  stage,
+                  created_at: stamp(i),
+                }));
+              // Fallback when the model returned no transcript but read a line.
+              if (!seed.length && stage !== "opener" && primary.meta.read) {
+                seed.push({
+                  match_id: matchId,
+                  role: "them",
+                  content: primary.meta.read,
+                  stage,
+                  created_at: stamp(0),
+                });
+              }
+              if (seed.length) await db.from("messages").insert(seed);
+            } else if (stage !== "opener" && primary.meta.read) {
+              // Continuing thread: only the new incoming line (prior turns are
+              // already stored), so we don't duplicate the history.
               await db
                 .from("messages")
-                .insert({ match_id: matchId, role: "them", content: primary.meta.read, stage });
+                .insert({
+                  match_id: matchId,
+                  role: "them",
+                  content: primary.meta.read,
+                  stage,
+                  created_at: stamp(0),
+                });
             }
             const { data: sug } = await db
               .from("messages")
-              .insert({ match_id: matchId, role: "suggestion", content: reply0, stage })
+              .insert({
+                match_id: matchId,
+                role: "suggestion",
+                content: reply0,
+                stage,
+                created_at: stamp(1000),
+              })
               .select("id")
               .single();
             if (sug) suggestionMsgId = sug.id as string;
