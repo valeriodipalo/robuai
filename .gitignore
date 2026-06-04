@@ -1,0 +1,29 @@
+# Secrets — never commit
+.env
+.env.local
+*.key
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.next/
+.vite/
+*.tsbuildinfo
+next-env.d.ts
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# Vercel
+.vercel

@@ -1,0 +1,200 @@
+import { NextResponse } from "next/server";
+import { streamChat, completeChat } from "@/lib/openrouter";
+import {
+  buildSinglePrompt,
+  buildSingleUser,
+  buildAlternateUser,
+  splitReplyMeta,
+} from "@/lib/prompt";
+import { getVoice } from "@/lib/voices";
+import { supabaseAdmin, isSupabaseConfigured } from "@/lib/supabase";
+import { Stage, Message, ReplyRequest, ReplyOption } from "@/lib/types";
+
+export const runtime = "nodejs";
+
+const STAGES: Stage[] = ["opener", "reply", "escalate"];
+function coerceStage(value: string): Stage {
+  return (STAGES as string[]).includes(value) ? (value as Stage) : "reply";
+}
+
+export async function POST(request: Request) {
+  let body: ReplyRequest;
+  try {
+    body = (await request.json()) as ReplyRequest;
+  } catch {
+    return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+  }
+
+  const { imageDataUrl, voiceId, deviceId } = body;
+  if (!imageDataUrl || !imageDataUrl.startsWith("data:image")) {
+    return NextResponse.json(
+      { error: "A valid imageDataUrl (data:image/...) is required." },
+      { status: 400 }
+    );
+  }
+  if (!voiceId) return NextResponse.json({ error: "voiceId is required." }, { status: 400 });
+  if (!deviceId) return NextResponse.json({ error: "deviceId is required." }, { status: 400 });
+
+  const configured = isSupabaseConfigured();
+
+  // Load profile + full thread history (memory) before streaming.
+  let ageRange: string | null = null;
+  let intent: string | null = null;
+  let interests: string[] | null = null;
+  let profileVoiceId: string | null = null;
+  let history: Pick<Message, "role" | "content">[] | undefined;
+
+  if (configured) {
+    const db = supabaseAdmin();
+    const { data: profile } = await db
+      .from("profiles")
+      .select()
+      .eq("device_id", deviceId)
+      .maybeSingle();
+    if (profile) {
+      ageRange = profile.age_range ?? null;
+      intent = profile.intent ?? null;
+      interests = profile.interests ?? null;
+      profileVoiceId = profile.voice_id ?? null;
+    }
+    if (body.matchId) {
+      const { data: prior } = await db
+        .from("messages")
+        .select("role, content")
+        .eq("match_id", body.matchId)
+        .order("created_at", { ascending: true })
+        .limit(500);
+      if (prior?.length) {
+        history = prior.map((m) => ({
+          role: m.role as Message["role"],
+          content: m.content as string,
+        }));
+      }
+    }
+  }
+
+  const voice = getVoice(voiceId || profileVoiceId);
+  const system = buildSinglePrompt({ voice, ageRange, intent, interests });
+  const userText = buildSingleUser(history);
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) =>
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+
+      try {
+        // ── Primary option: stream it live ─────────────────────────
+        let raw = "";
+        for await (const delta of streamChat({ system, userText, imageDataUrl })) {
+          raw += delta;
+          send({ type: "delta", text: delta });
+        }
+        const primary = splitReplyMeta(raw);
+        const stage = coerceStage(primary.meta.stage);
+        const reply0 = primary.reply;
+
+        // ── Persist the turn (match, her line, primary suggestion, turn) ──
+        let matchId = body.matchId || "";
+        let turnId = "";
+        let suggestionMsgId: string | null = null;
+        if (configured && reply0) {
+          const db = supabaseAdmin();
+          const now = new Date().toISOString();
+          if (!body.matchId) {
+            const { data: ins } = await db
+              .from("matches")
+              .insert({
+                device_id: deviceId,
+                name: primary.meta.matchName,
+                last_stage: stage,
+                last_snippet: reply0,
+              })
+              .select("id")
+              .single();
+            if (ins) matchId = ins.id as string;
+          } else {
+            const update: Record<string, unknown> = {
+              last_stage: stage,
+              last_snippet: reply0,
+              updated_at: now,
+            };
+            if (primary.meta.matchName) update.name = primary.meta.matchName;
+            await db.from("matches").update(update).eq("id", body.matchId);
+          }
+          if (matchId) {
+            if (stage !== "opener" && primary.meta.read) {
+              await db
+                .from("messages")
+                .insert({ match_id: matchId, role: "them", content: primary.meta.read, stage });
+            }
+            const { data: sug } = await db
+              .from("messages")
+              .insert({ match_id: matchId, role: "suggestion", content: reply0, stage })
+              .select("id")
+              .single();
+            if (sug) suggestionMsgId = sug.id as string;
+            const { data: turn } = await db
+              .from("turns")
+              .insert({
+                match_id: matchId,
+                device_id: deviceId,
+                stage,
+                transcript: primary.meta.transcript,
+                options: [{ reply: reply0, why: primary.meta.why }],
+                suggestion_message_id: suggestionMsgId,
+              })
+              .select("id")
+              .single();
+            if (turn) turnId = turn.id as string;
+          }
+        }
+
+        send({
+          type: "primary",
+          reply: reply0,
+          stage,
+          read: primary.meta.read,
+          matchName: primary.meta.matchName,
+          why: primary.meta.why,
+          matchId,
+          turnId,
+        });
+
+        // ── Alternate options (different angles) for the swipe deck ──
+        const options: ReplyOption[] = [{ reply: reply0, why: primary.meta.why }];
+        const altUser = buildAlternateUser(history, [reply0]);
+        const raws = await Promise.all([
+          completeChat({ system, userText: altUser, imageDataUrl }).catch(() => ""),
+          completeChat({ system, userText: altUser, imageDataUrl }).catch(() => ""),
+        ]);
+        for (const r of raws) {
+          const o = splitReplyMeta(r);
+          if (o.reply && !options.some((x) => x.reply === o.reply)) {
+            options.push({ reply: o.reply, why: o.meta.why });
+            send({ type: "option", reply: o.reply, why: o.meta.why });
+          }
+        }
+
+        if (configured && turnId && options.length > 1) {
+          await supabaseAdmin().from("turns").update({ options }).eq("id", turnId);
+        }
+
+        send({ type: "done", options, matchId, turnId });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unexpected error.";
+        send({ type: "error", error: message });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}

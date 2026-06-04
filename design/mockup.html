@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RobuAI — Design Starting Point</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#0d0a12;
+    --ink-2:#141019;
+    --plum:#1d1626;
+    --card:#1a1422;
+    --line:rgba(255,255,255,.08);
+    --line-2:rgba(255,255,255,.14);
+    --text:#f4eef0;
+    --muted:#a99fab;
+    --faint:#6f6675;
+    --ember-1:#ff6a5b;
+    --ember-2:#ffae5c;
+    --rose:#ff8fa3;
+    --glow:rgba(255,106,91,.35);
+    --ok:#76e3b0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:'Hanken Grotesk',system-ui,sans-serif;
+    background:
+      radial-gradient(1200px 700px at 15% -10%, rgba(255,106,91,.14), transparent 55%),
+      radial-gradient(1000px 600px at 100% 0%, rgba(255,143,163,.10), transparent 50%),
+      radial-gradient(900px 900px at 50% 120%, rgba(255,174,92,.08), transparent 60%),
+      var(--ink);
+    color:var(--text);
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+    padding:56px 28px 80px;
+    position:relative;
+    overflow-x:hidden;
+  }
+  /* grain */
+  body::after{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:9;opacity:.5;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");
+  }
+
+  /* ---- header ---- */
+  .head{max-width:1180px;margin:0 auto 52px;position:relative;z-index:2}
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+  .flame{
+    width:34px;height:34px;border-radius:11px;display:grid;place-items:center;
+    background:linear-gradient(150deg,var(--ember-1),var(--ember-2));
+    box-shadow:0 8px 24px -6px var(--glow);font-size:18px;
+  }
+  .brand b{font-weight:600;letter-spacing:.02em;font-size:18px}
+  .head h1{
+    font-family:'Fraunces',serif;font-weight:500;font-size:clamp(40px,7vw,74px);
+    line-height:.98;letter-spacing:-.02em;max-width:14ch;
+  }
+  .head h1 em{
+    font-style:italic;
+    background:linear-gradient(120deg,var(--ember-1),var(--rose) 60%,var(--ember-2));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .head p{margin-top:22px;color:var(--muted);font-size:17px;max-width:52ch;line-height:1.55}
+  .head .meta{margin-top:24px;display:flex;gap:10px;flex-wrap:wrap}
+  .pill{
+    font-size:12.5px;color:var(--muted);border:1px solid var(--line);
+    padding:7px 13px;border-radius:999px;background:rgba(255,255,255,.02);
+    letter-spacing:.02em;
+  }
+  .pill b{color:var(--text);font-weight:600}
+
+  /* ---- phone rail ---- */
+  .rail{
+    max-width:1180px;margin:0 auto;display:flex;gap:34px;flex-wrap:wrap;
+    justify-content:center;position:relative;z-index:2;
+  }
+  .stage{display:flex;flex-direction:column;align-items:center;gap:16px;opacity:0;transform:translateY(26px);
+    animation:rise .8s cubic-bezier(.2,.8,.2,1) forwards}
+  .stage:nth-child(1){animation-delay:.05s}
+  .stage:nth-child(2){animation-delay:.18s}
+  .stage:nth-child(3){animation-delay:.31s}
+  .stage:nth-child(4){animation-delay:.44s}
+  @keyframes rise{to{opacity:1;transform:none}}
+  .label{font-size:13px;color:var(--faint);letter-spacing:.14em;text-transform:uppercase}
+  .label b{color:var(--ember-2);font-weight:600}
+
+  .phone{
+    width:300px;height:620px;border-radius:42px;padding:11px;
+    background:linear-gradient(160deg,#2a2230,#15101c);
+    box-shadow:0 40px 90px -30px rgba(0,0,0,.8),0 0 0 1px var(--line),
+      inset 0 1px 0 rgba(255,255,255,.06);
+    position:relative;
+  }
+  .screen{
+    width:100%;height:100%;border-radius:33px;overflow:hidden;position:relative;
+    background:linear-gradient(180deg,var(--ink-2),var(--ink));
+    display:flex;flex-direction:column;
+  }
+  .notch{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:96px;height:7px;border-radius:6px;background:rgba(0,0,0,.55);z-index:5}
+  .pad{padding:30px 20px 18px;flex:1;display:flex;flex-direction:column;min-height:0}
+
+  /* status row */
+  .sbar{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--faint);padding:6px 4px 0}
+  .sbar .dots{display:flex;gap:4px}
+  .sbar .dots i{width:5px;height:5px;border-radius:50%;background:var(--faint);display:block}
+
+  .mini-brand{display:flex;align-items:center;gap:8px}
+  .mini-brand .f{width:22px;height:22px;border-radius:8px;background:linear-gradient(150deg,var(--ember-1),var(--ember-2));display:grid;place-items:center;font-size:12px}
+  .mini-brand span{font-weight:600;font-size:14px;letter-spacing:.01em}
+  .ico{width:34px;height:34px;border-radius:11px;border:1px solid var(--line);display:grid;place-items:center;color:var(--muted);font-size:15px;background:rgba(255,255,255,.02)}
+
+  h2.t{font-family:'Fraunces',serif;font-weight:500;font-size:27px;line-height:1.05;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:13.5px;line-height:1.5;margin-top:9px}
+  .step{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ember-2);font-weight:600}
+
+  /* voice cards */
+  .vcards{display:flex;flex-direction:column;gap:11px;margin-top:18px}
+  .vc{
+    border:1px solid var(--line);border-radius:18px;padding:14px;background:rgba(255,255,255,.02);
+    position:relative;transition:.25s;
+  }
+  .vc .nm{font-weight:600;font-size:14.5px;display:flex;align-items:center;gap:8px}
+  .vc .nm .e{font-size:15px}
+  .vc .ex{margin-top:9px;font-size:12.5px;color:var(--muted);line-height:1.45;
+    background:rgba(0,0,0,.25);border-radius:12px 12px 12px 4px;padding:9px 11px;border:1px solid var(--line)}
+  .vc.sel{
+    border-color:transparent;
+    background:linear-gradient(160deg,rgba(255,106,91,.16),rgba(255,174,92,.07));
+    box-shadow:0 0 0 1.5px var(--ember-1),0 18px 40px -22px var(--glow);
+  }
+  .vc.sel::after{content:"✓";position:absolute;top:13px;right:14px;width:22px;height:22px;border-radius:50%;
+    background:linear-gradient(150deg,var(--ember-1),var(--ember-2));color:#1a0f0c;font-size:13px;font-weight:700;display:grid;place-items:center}
+
+  .btn{
+    margin-top:auto;border:none;border-radius:16px;padding:15px;font-family:inherit;font-weight:600;font-size:15px;
+    background:linear-gradient(120deg,var(--ember-1),var(--ember-2));color:#1c0f0a;cursor:pointer;
+    box-shadow:0 16px 34px -14px var(--glow);letter-spacing:.01em;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+  }
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line-2);box-shadow:none}
+
+  /* upload dropzone */
+  .drop{
+    margin-top:18px;flex:1;border:1.5px dashed var(--line-2);border-radius:24px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px;
+    background:radial-gradient(120px 120px at 50% 38%,rgba(255,106,91,.10),transparent 70%);
+    padding:24px;
+  }
+  .drop .ring{width:66px;height:66px;border-radius:22px;display:grid;place-items:center;font-size:26px;
+    background:linear-gradient(150deg,rgba(255,106,91,.2),rgba(255,174,92,.12));border:1px solid var(--line-2)}
+  .drop b{font-size:16px;font-weight:600}
+  .drop small{color:var(--muted);font-size:12.5px}
+  .chip{
+    align-self:flex-start;margin-top:14px;display:inline-flex;align-items:center;gap:7px;
+    border:1px solid var(--line);border-radius:999px;padding:8px 13px;font-size:12.5px;color:var(--text);
+    background:rgba(255,255,255,.02)}
+  .chip .d{width:7px;height:7px;border-radius:50%;background:var(--ember-1)}
+  .chip span{color:var(--muted)}
+
+  /* reply result */
+  .shot{margin-top:16px;border-radius:16px;border:1px solid var(--line);overflow:hidden;background:rgba(0,0,0,.3)}
+  .shot .bar{display:flex;align-items:center;justify-content:space-between;padding:10px 12px}
+  .shot .who{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600}
+  .shot .who .av{width:26px;height:26px;border-radius:50%;background:linear-gradient(140deg,var(--rose),var(--ember-2));display:grid;place-items:center;font-size:12px;color:#1c0f0a;font-weight:700}
+  .badge{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ember-2);
+    border:1px solid rgba(255,174,92,.4);border-radius:999px;padding:4px 9px;background:rgba(255,174,92,.08)}
+  .convo{padding:4px 12px 13px;display:flex;flex-direction:column;gap:7px}
+  .bub{max-width:78%;font-size:12.5px;line-height:1.4;padding:8px 11px;border-radius:13px}
+  .bub.them{align-self:flex-start;background:#241c2d;border:1px solid var(--line);border-bottom-left-radius:4px;color:var(--muted)}
+
+  .reply-card{margin-top:16px;border-radius:20px;padding:17px;position:relative;
+    background:linear-gradient(160deg,rgba(255,106,91,.14),rgba(255,174,92,.05));
+    box-shadow:0 0 0 1.5px rgba(255,106,91,.35),0 22px 46px -26px var(--glow)}
+  .reply-card .tag{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ember-2);font-weight:600;display:flex;align-items:center;gap:7px}
+  .reply-card .msg{font-family:'Fraunces',serif;font-size:19px;line-height:1.34;margin-top:11px;letter-spacing:-.01em}
+  .reply-card .src{margin-top:13px;font-size:11.5px;color:var(--faint)}
+  .acts{display:flex;gap:10px;margin-top:14px}
+  .acts .btn{margin-top:0;flex:1;padding:13px}
+  .acts .btn.ghost{flex:0 0 auto;width:52px;padding:13px}
+
+  /* history */
+  .hlist{margin-top:16px;display:flex;flex-direction:column;gap:9px;overflow:hidden}
+  .row{display:flex;align-items:center;gap:12px;padding:11px;border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.02)}
+  .row .av{width:40px;height:40px;border-radius:14px;display:grid;place-items:center;font-weight:700;color:#1c0f0a;font-size:15px;flex:none}
+  .row .av.a{background:linear-gradient(140deg,var(--rose),var(--ember-1))}
+  .row .av.b{background:linear-gradient(140deg,var(--ember-2),#ffd27a)}
+  .row .av.c{background:linear-gradient(140deg,#9b8cff,var(--rose))}
+  .row .tx{flex:1;min-width:0}
+  .row .tx b{font-size:14px;font-weight:600}
+  .row .tx p{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .row .meta-c{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:none}
+  .row .meta-c time{font-size:11px;color:var(--faint)}
+  .tg{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:999px}
+  .tg.op{color:var(--ember-2);background:rgba(255,174,92,.1)}
+  .tg.rp{color:var(--rose);background:rgba(255,143,163,.12)}
+  .tg.dt{color:var(--ok);background:rgba(118,227,176,.12)}
+  .tabs{display:flex;gap:6px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+  .tabs .tb{flex:1;text-align:center;font-size:11px;color:var(--faint);padding:6px;border-radius:10px}
+  .tabs .tb.on{color:var(--text);background:rgba(255,255,255,.05)}
+
+  footer{max-width:1180px;margin:60px auto 0;color:var(--faint);font-size:13px;text-align:center;position:relative;z-index:2;line-height:1.7}
+  footer b{color:var(--muted);font-weight:600}
+</style>
+</head>
+<body>
+
+<header class="head">
+  <div class="brand"><span class="flame">🔥</span><b>RobuAI</b></div>
+  <h1>Never stare at a <em>blank chat</em> again.</h1>
+  <p>A design starting point — four screens of the conversation assistant. Moody, intimate, after-dark. Open for critique: typography, color, the feel of the one-reply moment. Everything here is iterable.</p>
+  <div class="meta">
+    <span class="pill"><b>Screen 1</b> · Pick your voice</span>
+    <span class="pill"><b>Screen 2</b> · Drop a screenshot</span>
+    <span class="pill"><b>Screen 3</b> · The one reply</span>
+    <span class="pill"><b>Screen 4</b> · History</span>
+  </div>
+</header>
+
+<div class="rail">
+
+  <!-- 1 · ONBOARDING -->
+  <div class="stage">
+    <div class="phone"><div class="screen"><div class="notch"></div>
+      <div class="pad">
+        <div class="sbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+        <div style="margin-top:22px" class="step">Setup · 1 of 2</div>
+        <h2 class="t" style="margin-top:8px">How do you talk?</h2>
+        <p class="sub">Pick the voice closest to you. We sharpen it every time you tweak a reply.</p>
+        <div class="vcards">
+          <div class="vc sel">
+            <div class="nm"><span class="e">😏</span>The Playful Teaser</div>
+            <div class="ex">“Bold profile. Now prove the personality matches the photos 👀”</div>
+          </div>
+          <div class="vc">
+            <div class="nm"><span class="e">🎯</span>The Confident Direct</div>
+            <div class="ex">“You’re trouble, I can tell. Drink this week?”</div>
+          </div>
+          <div class="vc">
+            <div class="nm"><span class="e">🌙</span>The Genuine Curious</div>
+            <div class="ex">“Okay the dog or the travel pics — which story’s better?”</div>
+          </div>
+        </div>
+        <button class="btn" style="margin-top:16px">Continue →</button>
+      </div>
+    </div></div>
+    <div class="label">01 · <b>Voice</b></div>
+  </div>
+
+  <!-- 2 · UPLOAD -->
+  <div class="stage">
+    <div class="phone"><div class="screen"><div class="notch"></div>
+      <div class="pad">
+        <div class="sbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
+          <div class="mini-brand"><span class="f">🔥</span><span>RobuAI</span></div>
+          <div class="ico">🕑</div>
+        </div>
+        <h2 class="t" style="margin-top:24px">What did she say?</h2>
+        <p class="sub">Drop a screenshot of her profile or your chat — I’ll read it and find the move.</p>
+        <div class="drop">
+          <div class="ring">📸</div>
+          <div><b>Drop a screenshot</b><br><small>her bio · or the conversation</small></div>
+        </div>
+        <div class="chip"><span class="d"></span>Voice:&nbsp;<b style="font-weight:600">Playful Teaser</b>&nbsp;<span>▾</span></div>
+        <button class="btn" style="margin-top:14px">Read it & reply</button>
+      </div>
+    </div></div>
+    <div class="label">02 · <b>Drop</b></div>
+  </div>
+
+  <!-- 3 · REPLY -->
+  <div class="stage">
+    <div class="phone"><div class="screen"><div class="notch"></div>
+      <div class="pad">
+        <div class="sbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:16px">
+          <div class="ico">←</div><b style="font-size:15px">Sofia</b>
+        </div>
+        <div class="shot">
+          <div class="bar">
+            <div class="who"><span class="av">S</span>Sofia · 24</div>
+            <span class="badge">Her reply</span>
+          </div>
+          <div class="convo">
+            <div class="bub them">haha okay the spontaneous trip was kind of a flex 😄</div>
+            <div class="bub them">so where’s the next one</div>
+          </div>
+        </div>
+        <div class="reply-card">
+          <div class="tag">✶ Your move</div>
+          <div class="msg">“Undecided — but I only pick the next trip with someone worth the window seat. Auditions are open ☕”</div>
+          <div class="src">in your voice · Playful Teaser · reads as confident, not needy</div>
+        </div>
+        <div class="acts">
+          <button class="btn">⧉ Copy & send</button>
+          <button class="btn ghost">↻</button>
+        </div>
+      </div>
+    </div></div>
+    <div class="label">03 · <b>The reply</b></div>
+  </div>
+
+  <!-- 4 · HISTORY -->
+  <div class="stage">
+    <div class="phone"><div class="screen"><div class="notch"></div>
+      <div class="pad">
+        <div class="sbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
+          <h2 class="t">Your matches</h2><div class="ico">＋</div>
+        </div>
+        <p class="sub">Pick up any chat — I remember the whole thread.</p>
+        <div class="hlist">
+          <div class="row">
+            <div class="av a">S</div>
+            <div class="tx"><b>Sofia</b><p>You: …worth the window seat ☕</p></div>
+            <div class="meta-c"><time>now</time><span class="tg rp">Reply</span></div>
+          </div>
+          <div class="row">
+            <div class="av b">G</div>
+            <div class="tx"><b>Giulia</b><p>her: omg you actually read my bio</p></div>
+            <div class="meta-c"><time>2h</time><span class="tg dt">Date?</span></div>
+          </div>
+          <div class="row">
+            <div class="av c">M</div>
+            <div class="tx"><b>Martina</b><p>Draft an opener from her bio</p></div>
+            <div class="meta-c"><time>1d</time><span class="tg op">Opener</span></div>
+          </div>
+          <div class="row">
+            <div class="av a">E</div>
+            <div class="tx"><b>Elena</b><p>her: hahah stoooop 😭</p></div>
+            <div class="meta-c"><time>3d</time><span class="tg rp">Reply</span></div>
+          </div>
+        </div>
+        <div class="tabs">
+          <div class="tb">＋ New</div>
+          <div class="tb on">⌂ Matches</div>
+          <div class="tb">◎ Voice</div>
+        </div>
+      </div>
+    </div></div>
+    <div class="label">04 · <b>History</b></div>
+  </div>
+
+</div>
+
+<footer>
+  <b>RobuAI</b> — design starting point, v0. Aesthetic: after-dark / intimate · ember on ink · Fraunces + Hanken Grotesk.<br>
+  Tell me what to push: warmer or cooler · serif or not · denser or airier · the one-reply card.
+</footer>
+
+</body>
+</html>
