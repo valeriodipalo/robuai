@@ -1,4 +1,4 @@
-import { VoiceProfile, Message } from "./types";
+import { VoiceProfile, Message, StructuredChat, StructuredMessage } from "./types";
 
 export interface PromptContext {
   voice: VoiceProfile;
@@ -64,8 +64,15 @@ ${META_DELIM}
 In the transcript: for a CHAT screenshot, list every message you can read in order (from "her" or "him"); for a PROFILE with no messages, use an empty array [].`;
 }
 
-/** The user-turn text accompanying the screenshot: the stored thread (memory). */
-export function buildSingleUser(history?: Pick<Message, "role" | "content">[]): string {
+/**
+ * The user-turn text accompanying the screenshot: the stored thread (memory).
+ * `avoid` lists messages already proposed for this moment (across prior
+ * regenerations) so the model produces a genuinely different angle.
+ */
+export function buildSingleUser(
+  history?: Pick<Message, "role" | "content">[],
+  avoid?: string[]
+): string {
   const lines: string[] = [];
   if (history && history.length) {
     lines.push("EARLIER IN THIS THREAD (memory from past turns, oldest first):");
@@ -73,7 +80,7 @@ export function buildSingleUser(history?: Pick<Message, "role" | "content">[]): 
     lines.push("");
   }
   lines.push("Read the screenshot and give me my one move. Follow the output format exactly.");
-  return lines.join("\n");
+  return lines.join("\n") + avoidBlock(avoid);
 }
 
 /** User turn for generating an ALTERNATE option — a different angle. */
@@ -81,13 +88,16 @@ export function buildAlternateUser(
   history: Pick<Message, "role" | "content">[] | undefined,
   avoid: string[]
 ): string {
-  const base = buildSingleUser(history);
-  const avoidBlock = avoid.length
-    ? `\n\nI already have these options — give me a genuinely DIFFERENT angle (different hook, structure, or move), not a reword:\n${avoid
-        .map((a) => `- "${a}"`)
-        .join("\n")}`
-    : "";
-  return base + avoidBlock;
+  return buildSingleUser(history, avoid);
+}
+
+/** A "don't repeat these" block listing replies already shown for this moment. */
+function avoidBlock(avoid?: string[]): string {
+  const list = (avoid ?? []).filter((a) => a && a.trim());
+  if (!list.length) return "";
+  return `\n\nI already have these options — give me a genuinely DIFFERENT angle (different hook, structure, or move), not a reword:\n${list
+    .map((a) => `- "${a}"`)
+    .join("\n")}`;
 }
 
 function labelRole(role: Message["role"]): string {
@@ -174,4 +184,79 @@ function extractJson(raw: string): Record<string, unknown> {
 function nullish(v: unknown): string | null {
   if (v === null || v === undefined || v === "" || v === "null") return null;
   return String(v);
+}
+
+// ── Chat structuring (the accurate "who wrote what" pass) ──────────────────
+// A dedicated, alignment-first pass that reconstructs the conversation from a
+// screenshot. Validated on WhatsApp reply-quotes + Tinder layouts with
+// gemini-2.5-flash. The reply writer and the DB both consume its output, so
+// "who said what" has a single, accurate source of truth.
+export const STRUCTURE_SYSTEM = `You are a precise OCR + chat-layout analyst. You are given ONE screenshot of a dating/messaging app conversation (WhatsApp, Tinder, iMessage, Instagram DM, Hinge, Bumble, etc.). Reconstruct the conversation as STRUCTURED data. Your single most important job is getting WHO SAID WHAT exactly right.
+
+HOW TO TELL WHO IS WHO — use alignment, not color:
+- The phone's OWNER (the person whose phone this is) = "him". His messages are aligned to the RIGHT side of the screen.
+- The OTHER person (the match) = "her". Her messages are aligned to the LEFT side.
+- This holds across ALL apps. Bubble COLOR is only a secondary hint and differs per app (WhatsApp right=green, Tinder/iMessage right=blue, etc.) — NEVER decide the author from color alone; decide from which side the bubble hugs.
+- The match's NAME is in the conversation header at the TOP of the screen (e.g. a contact name or the match's first name). That name belongs to "her".
+
+REPLY-QUOTE TRAP (the #1 mistake — read carefully):
+- WhatsApp/iMessage/etc. render a REPLY as a SINGLE bubble that stacks, top to bottom: (1) a small inset box = a name label + a snippet of the EARLIER message being replied to, then (2) the actual new reply text below it. The whole thing is ONE message, sent by the person whose SIDE the bubble is on.
+- The inset quote box usually shows the ORIGINAL author's name (e.g. "Celeste") and a slightly different shade. Do NOT be fooled into reading it as a separate incoming message — it is NOT a message, it is a back-reference. That exact text already appears EARLIER in the chat as its own real bubble.
+- Emit exactly ONE message object for a reply: from = the bubble's side; text = ONLY the new reply text (NEVER include the quoted snippet in text); reply_to = the quoted snippet.
+- NEVER output the quoted snippet as its own message object.
+- Example: a RIGHT-aligned (his) bubble showing "Celeste / Hai una querela" then "da quale pulpito" → ONE object {from:"him", text:"da quale pulpito", reply_to:"Hai una querela"}. Nothing else.
+
+SELF-CHECK before you output (do this every time):
+- For each message whose reply_to is set, make sure you did NOT also emit a separate message equal to that reply_to text right next to it. A "her"/"him" message that (a) duplicates some other message's reply_to and (b) has a null timestamp is almost always a mis-split quote — remove it.
+- Re-verify each separator's before_index points to the message that actually follows the divider in the image.
+
+OTHER RULES:
+- Transcribe in visual order, top to bottom. Faithfully — keep original language, casing, emoji, typos. Do not translate or clean up.
+- Capture the timestamp shown next to a message in "time" (e.g. "20:42"), else null.
+- Date/section separators ("Today", "Fri 22 May") are NOT messages — list them in "separators" with the index of the first message that follows, but never as a message.
+- IGNORE all UI chrome: status bar, header buttons, push-notification banners ("See when X answers", "ENABLE PUSH NOTIFICATIONS"), reactions/hearts, read receipts/checkmarks, "Sent"/"Delivered", the "Type a message…/Send" composer, GIF/sticker bars.
+- If the screenshot is a PROFILE/BIO with no conversation, return "messages": [] and put the person's name in "match_name".
+- If a message is partially cut off at the top/bottom edge, include what you can read and set "partial": true.
+- Output STRICT JSON only — no markdown, no prose, no code fences.
+
+OUTPUT SHAPE (exact keys):
+{
+  "app": "whatsapp|tinder|imessage|instagram|hinge|bumble|other",
+  "match_name": "<her name from the header, or null>",
+  "user_side": "right",
+  "messages": [
+    { "from": "him|her", "text": "<message>", "time": "<HH:MM or null>", "reply_to": "<quoted snippet or null>", "partial": false }
+  ],
+  "separators": [ { "label": "Today", "before_index": 5 } ],
+  "notes": "<one short line on anything ambiguous, or empty>"
+}`;
+
+export const STRUCTURE_USER =
+  "Here is the screenshot. Return the structured JSON exactly as specified. Get the left/right attribution and any reply-quotes right.";
+
+/** Parse the structuring model's JSON into a normalized StructuredChat. */
+export function parseStructuredChat(raw: string): StructuredChat | null {
+  let obj: Record<string, unknown>;
+  try {
+    obj = extractJson(raw);
+  } catch {
+    return null;
+  }
+  const rawMsgs = Array.isArray(obj.messages) ? (obj.messages as unknown[]) : [];
+  const messages: StructuredMessage[] = rawMsgs
+    .map((m): StructuredMessage => {
+      const mm = (m ?? {}) as { from?: string; text?: string; time?: unknown; reply_to?: unknown };
+      return {
+        from: mm.from === "him" ? "him" : "her",
+        text: String(mm.text ?? "").trim(),
+        time: nullish(mm.time),
+        reply_to: nullish(mm.reply_to),
+      };
+    })
+    .filter((m) => m.text);
+  return {
+    app: nullish(obj.app),
+    matchName: nullish(obj.match_name),
+    messages,
+  };
 }

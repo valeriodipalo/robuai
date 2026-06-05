@@ -18,11 +18,21 @@ export function chatModel(): string {
   return process.env.MODEL || process.env.REPLY_MODEL || DEFAULT_MODEL;
 }
 
-/** Non-streaming completion — used to generate the extra swipe options. */
+// A stronger vision model for the chat-structuring pass (accurate "who wrote
+// what"). flash-lite is unreliable on reply-quote layouts; flash is not.
+const DEFAULT_STRUCTURE_MODEL = "google/gemini-2.5-flash";
+export function structureModel(): string {
+  return process.env.STRUCTURE_MODEL || process.env.VISION_MODEL || DEFAULT_STRUCTURE_MODEL;
+}
+
+/** Non-streaming completion — swipe alternates and the structuring pass. */
 export async function completeChat(params: {
   system: string;
   userText: string;
   imageDataUrl: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
 }): Promise<string> {
   const res = await fetch(OPENROUTER_URL, {
     method: "POST",
@@ -33,9 +43,9 @@ export async function completeChat(params: {
       "X-Title": "RobuAI",
     },
     body: JSON.stringify({
-      model: chatModel(),
-      temperature: 0.95,
-      max_tokens: 700,
+      model: params.model || chatModel(),
+      temperature: params.temperature ?? 0.95,
+      max_tokens: params.maxTokens ?? 700,
       messages: [
         { role: "system", content: params.system },
         {

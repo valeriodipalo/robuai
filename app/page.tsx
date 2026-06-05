@@ -158,7 +158,14 @@ export default function Page() {
         const res = await fetch("/api/reply", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageDataUrl, voiceId, deviceId, matchId: activeMatchId }),
+          body: JSON.stringify({
+            imageDataUrl,
+            voiceId,
+            deviceId,
+            matchId: activeMatchId,
+            regen,
+            turnId: regen ? result?.turnId ?? null : null,
+          }),
         });
         if (!res.ok || !res.body) {
           let msg = GENERIC;
@@ -258,7 +265,37 @@ export default function Page() {
         setRegenerating(false);
       }
     },
-    [imageDataUrl, voiceId, deviceId, activeMatchId],
+    [imageDataUrl, voiceId, deviceId, activeMatchId, result?.turnId],
+  );
+
+  // ── comment on a specific proposal from the swipe screen ─────────
+  const commentOnOption = useCallback(
+    async (
+      turnId: string,
+      optionIndex: number,
+      body: string,
+      messageId?: string | null,
+    ) => {
+      const text = body.trim();
+      if (!text || !activeMatchId) return;
+      try {
+        await fetch("/api/comments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            deviceId,
+            matchId: activeMatchId,
+            turnId,
+            optionIndex,
+            messageId: messageId ?? null,
+            body: text,
+          }),
+        });
+      } catch {
+        // best-effort; ignore failures
+      }
+    },
+    [deviceId, activeMatchId],
   );
 
   // ── record which swipe option the user picked ────────────────────
@@ -468,6 +505,7 @@ export default function Page() {
           onBack={() => goNew()}
           onSelect={selectOption}
           onFeedback={recordFeedback}
+          onCommentOption={commentOnOption}
           regenerating={regenerating}
         />
       )}

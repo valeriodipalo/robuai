@@ -116,11 +116,12 @@ export default function Home({
         </div>
       )}
 
+      {/* No `capture` attribute: screenshots live in the photo library, so the
+          native picker should default to it (camera is still offered there). */}
       <input
         ref={inputRef}
         type="file"
         accept="image/*"
-        capture="environment"
         className="hidden"
         onChange={(e) => handleFile(e.target.files?.[0])}
       />

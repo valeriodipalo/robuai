@@ -24,6 +24,7 @@ export default function Result({
   onBack,
   onSelect,
   onFeedback,
+  onCommentOption,
   regenerating,
 }: {
   result: ReplyResponse | null;
@@ -42,10 +43,19 @@ export default function Result({
     reply: string,
     score: -1 | 1,
   ) => void;
+  onCommentOption?: (
+    turnId: string,
+    optionIndex: number,
+    body: string,
+    messageId?: string | null,
+  ) => void;
   regenerating?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [active, setActive] = useState(0);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteSaved, setNoteSaved] = useState(false);
   const [drag, setDrag] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const draggingRef = useRef(false);
@@ -65,6 +75,24 @@ export default function Result({
   useEffect(() => {
     if (active > n - 1) setActive(0);
   }, [n, active]);
+
+  // A note targets the visible card — close the composer when the deck moves.
+  useEffect(() => {
+    setNoteOpen(false);
+    setNoteDraft("");
+    setNoteSaved(false);
+  }, [idx]);
+
+  function saveNote() {
+    const text = noteDraft.trim();
+    if (!text || !result?.turnId || !onCommentOption) return;
+    const messageId = idx === 0 ? result.suggestionMessageId ?? null : null;
+    onCommentOption(result.turnId, idx, text, messageId);
+    setNoteDraft("");
+    setNoteOpen(false);
+    setNoteSaved(true);
+    setTimeout(() => setNoteSaved(false), 1800);
+  }
 
   function onPointerDown(e: React.PointerEvent) {
     if (live || n <= 1) return;
@@ -97,6 +125,9 @@ export default function Result({
     if (dx < -THRESH || v < -VEL) {
       judge(-1);
       if (idx < n - 1) setActive(idx + 1);
+      // Rejected the last proposal → regenerate a fresh batch that avoids all
+      // the proposals already shown for this moment.
+      else if (!live && !regenerating) onRegenerate();
     } else if (dx > THRESH || v > VEL) {
       judge(1);
       if (idx > 0) setActive(idx - 1);
@@ -307,6 +338,52 @@ export default function Result({
             swipe the card · ↩ to go back
           </p>
         </>
+      )}
+
+      {/* per-option note — feedback on this specific proposal */}
+      {!live && result?.turnId && onCommentOption && (
+        <div className="mt-3">
+          {noteOpen ? (
+            <div className="flex items-end gap-2">
+              <textarea
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                placeholder={`Note on option ${idx + 1}…`}
+                rows={2}
+                autoFocus
+                className="flex-1 resize-none rounded-[12px] border border-white/[.1] bg-black/30 px-3 py-2 text-[13px] leading-[1.4] text-white placeholder:text-faint focus:border-ember-2/60 focus:outline-none"
+              />
+              <div className="flex flex-col gap-1.5">
+                <button
+                  type="button"
+                  onClick={saveNote}
+                  disabled={!noteDraft.trim()}
+                  className="ember-btn rounded-[11px] px-3 py-1.5 text-[12px] font-semibold disabled:opacity-40"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNoteOpen(false);
+                    setNoteDraft("");
+                  }}
+                  className="rounded-[11px] px-3 py-1 text-[11px] text-faint hover:text-muted"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNoteOpen(true)}
+              className="text-[11.5px] text-muted hover:underline"
+            >
+              {noteSaved ? "🗒 note saved" : `+ note on option ${idx + 1}`}
+            </button>
+          )}
+        </div>
       )}
 
       {/* actions: back · copy · regenerate */}

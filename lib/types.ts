@@ -62,6 +62,12 @@ export interface ReplyRequest {
   voiceId: VoiceId;
   deviceId: string;
   matchId?: string | null; // continue an existing thread
+  /** This request regenerates the SAME moment: skip re-storing the screenshot
+   *  and the incoming line, and feed all prior proposals into the prompt as
+   *  "already tried — give a different angle". */
+  regen?: boolean;
+  /** The turn being regenerated, for reference. */
+  turnId?: string | null;
 }
 
 /** One swipeable reply option. */
@@ -74,6 +80,24 @@ export interface ReplyOption {
 export interface TranscriptLine {
   from: "her" | "him";
   text: string;
+}
+
+/** One message extracted from a chat screenshot by the structuring pass. */
+export interface StructuredMessage {
+  /** "him" = the phone owner (right-aligned), "her" = the match (left-aligned). */
+  from: "him" | "her";
+  text: string;
+  /** Timestamp shown next to the message (e.g. "20:42"), if any. */
+  time: string | null;
+  /** For a reply: the quoted snippet it replies to (never its own message). */
+  reply_to: string | null;
+}
+
+/** Accurate structured transcript of a chat screenshot ("who wrote what"). */
+export interface StructuredChat {
+  app: string | null;
+  matchName: string | null;
+  messages: StructuredMessage[];
 }
 
 /** One uploaded screenshot in a conversation. `signedUrl` is minted on read (never stored). */

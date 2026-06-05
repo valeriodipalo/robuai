@@ -3,6 +3,12 @@
 .env.local
 *.key
 
+# Personal test screenshots (real chats — keep out of the repo)
+IMG_*.PNG
+IMG_*.png
+IMG_*.jpg
+IMG_*.jpeg
+
 # Dependencies
 node_modules/
 .pnpm-store/

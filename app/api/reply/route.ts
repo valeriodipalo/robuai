@@ -9,13 +9,37 @@ import {
 import { getVoice } from "@/lib/voices";
 import { supabaseAdmin, isSupabaseConfigured } from "@/lib/supabase";
 import { uploadScreenshot } from "@/lib/storage";
-import { Stage, Message, ReplyRequest, ReplyOption } from "@/lib/types";
+import { structureChat } from "@/lib/structure";
+import { Stage, Message, ReplyRequest, ReplyOption, StructuredChat } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 const STAGES: Stage[] = ["opener", "reply", "escalate"];
 function coerceStage(value: string): Stage {
   return (STAGES as string[]).includes(value) ? (value as Stage) : "reply";
+}
+
+/** Normalize message text for dedup against already-stored history. */
+function norm(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** From a structured/transcript source, keep only lines not already stored,
+ *  mapped to thread roles (him→sent, her→them). Mutates `seen` to dedup. */
+function newLinesFrom(
+  msgs: { from: "him" | "her"; text: string }[],
+  seen: Set<string>,
+): { role: "them" | "sent"; content: string }[] {
+  const out: { role: "them" | "sent"; content: string }[] = [];
+  for (const m of msgs) {
+    const content = (m.text || "").trim();
+    if (!content) continue;
+    const k = norm(content);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ role: m.from === "him" ? "sent" : "them", content });
+  }
+  return out;
 }
 
 export async function POST(request: Request) {
@@ -44,6 +68,9 @@ export async function POST(request: Request) {
   let interests: string[] | null = null;
   let profileVoiceId: string | null = null;
   let history: Pick<Message, "role" | "content">[] | undefined;
+  // On a regeneration: every reply already proposed for this match, so the
+  // model is told to avoid them and give a genuinely different angle.
+  let priorProposals: string[] = [];
 
   if (configured) {
     const db = supabaseAdmin();
@@ -71,12 +98,25 @@ export async function POST(request: Request) {
           content: m.content as string,
         }));
       }
+      if (body.regen) {
+        const { data: priorTurns } = await db
+          .from("turns")
+          .select("options")
+          .eq("match_id", body.matchId);
+        const seen = new Set<string>();
+        for (const t of priorTurns ?? []) {
+          for (const o of (t.options as ReplyOption[] | null) ?? []) {
+            const r = (o?.reply ?? "").trim();
+            if (r && !seen.has(r)) seen.add(r);
+          }
+        }
+        priorProposals = [...seen];
+      }
     }
   }
 
   const voice = getVoice(voiceId || profileVoiceId);
   const system = buildSinglePrompt({ voice, ageRange, intent, interests });
-  const userText = buildSingleUser(history);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -101,7 +141,9 @@ export async function POST(request: Request) {
               .single();
             if (ins) matchId = ins.id as string;
           }
-          if (matchId) {
+          // On a regen the screenshot is already stored from the original turn;
+          // don't duplicate it.
+          if (matchId && !body.regen) {
             const id = crypto.randomUUID();
             const up = await uploadScreenshot({ deviceId, matchId, uploadId: id, dataUrl: imageDataUrl });
             if (up) {
@@ -124,6 +166,29 @@ export async function POST(request: Request) {
       send({ type: "conversation", matchId, uploadId });
 
       try {
+        // ── Accurate "who wrote what" pass (skipped on a regen — the same
+        //    moment's transcript is already stored). Single source of truth for
+        //    both the reply context and the DB. ──
+        const struct: StructuredChat | null = body.regen
+          ? null
+          : await structureChat(imageDataUrl);
+
+        // Merge the freshly-read conversation onto the stored thread, deduped,
+        // so the writer sees the full accurate back-and-forth (and we know which
+        // lines are new to persist). On a regen there's nothing new to add.
+        const seen = new Set((history ?? []).map((m) => norm(m.content)));
+        const newFromStruct = struct?.messages?.length
+          ? newLinesFrom(struct.messages, seen)
+          : [];
+        const writerHistory: Pick<Message, "role" | "content">[] = [
+          ...(history ?? []),
+          ...newFromStruct,
+        ];
+        const userText = buildSingleUser(
+          writerHistory.length ? writerHistory : history,
+          body.regen ? priorProposals : undefined,
+        );
+
         // ── Primary option: stream it live ─────────────────────────
         let raw = "";
         for await (const delta of streamChat({ system, userText, imageDataUrl })) {
@@ -133,6 +198,9 @@ export async function POST(request: Request) {
         const primary = splitReplyMeta(raw);
         const stage = coerceStage(primary.meta.stage);
         const reply0 = primary.reply;
+        // Prefer the structuring pass's name (read from the header) over the
+        // writer's; the writer can hallucinate a name.
+        const matchName = struct?.matchName ?? primary.meta.matchName;
 
         // ── Persist the turn (her line, primary suggestion, turn) onto the
         //    conversation created above. The match already exists, so we UPDATE
@@ -148,7 +216,7 @@ export async function POST(request: Request) {
               last_snippet: reply0,
               updated_at: now,
             };
-            if (primary.meta.matchName) update.name = primary.meta.matchName;
+            if (matchName) update.name = matchName;
             await db.from("matches").update(update).eq("id", matchId);
           }
           {
@@ -157,42 +225,33 @@ export async function POST(request: Request) {
             const baseMs = Date.now();
             const stamp = (i: number) => new Date(baseMs + i).toISOString();
 
-            if (!body.matchId) {
-              // New thread: seed the FULL conversation the model read from the
-              // screenshot — her lines as 'them', his prior lines as 'sent'.
-              const seed = (primary.meta.transcript ?? [])
-                .filter((t) => t.text)
-                .map((t, i) => ({
+            // Chat history to persist: the new lines from the structuring pass
+            // (deduped against what's already stored). On a regen there's
+            // nothing new. If structuring failed, fall back to the writer's own
+            // transcript / read line so the conversation is still recorded.
+            let toStore = newFromStruct;
+            if (!body.regen && !struct) {
+              const fbSeen = new Set((history ?? []).map((m) => norm(m.content)));
+              toStore = newLinesFrom(
+                (primary.meta.transcript ?? []).map((t) => ({ from: t.from, text: t.text })),
+                fbSeen,
+              );
+              if (!toStore.length && body.matchId && stage !== "opener" && primary.meta.read) {
+                toStore = [{ role: "them", content: primary.meta.read }];
+              }
+            }
+            if (toStore.length) {
+              await db.from("messages").insert(
+                toStore.map((m, i) => ({
                   match_id: matchId,
-                  role: t.from === "him" ? "sent" : "them",
-                  content: t.text,
+                  role: m.role,
+                  content: m.content,
                   stage,
                   created_at: stamp(i),
-                }));
-              // Fallback when the model returned no transcript but read a line.
-              if (!seed.length && stage !== "opener" && primary.meta.read) {
-                seed.push({
-                  match_id: matchId,
-                  role: "them",
-                  content: primary.meta.read,
-                  stage,
-                  created_at: stamp(0),
-                });
-              }
-              if (seed.length) await db.from("messages").insert(seed);
-            } else if (stage !== "opener" && primary.meta.read) {
-              // Continuing thread: only the new incoming line (prior turns are
-              // already stored), so we don't duplicate the history.
-              await db
-                .from("messages")
-                .insert({
-                  match_id: matchId,
-                  role: "them",
-                  content: primary.meta.read,
-                  stage,
-                  created_at: stamp(0),
-                });
+                })),
+              );
             }
+
             const { data: sug } = await db
               .from("messages")
               .insert({
@@ -205,13 +264,16 @@ export async function POST(request: Request) {
               .select("id")
               .single();
             if (sug) suggestionMsgId = sug.id as string;
+            const transcriptForTurn = struct?.messages?.length
+              ? struct.messages.map((m) => ({ from: m.from, text: m.text }))
+              : primary.meta.transcript;
             const { data: turn } = await db
               .from("turns")
               .insert({
                 match_id: matchId,
                 device_id: deviceId,
                 stage,
-                transcript: primary.meta.transcript,
+                transcript: transcriptForTurn,
                 options: [{ reply: reply0, why: primary.meta.why }],
                 suggestion_message_id: suggestionMsgId,
               })
@@ -231,7 +293,7 @@ export async function POST(request: Request) {
           reply: reply0,
           stage,
           read: primary.meta.read,
-          matchName: primary.meta.matchName,
+          matchName,
           why: primary.meta.why,
           matchId,
           turnId,
@@ -241,7 +303,10 @@ export async function POST(request: Request) {
 
         // ── Alternate options (different angles) for the swipe deck ──
         const options: ReplyOption[] = [{ reply: reply0, why: primary.meta.why }];
-        const altUser = buildAlternateUser(history, [reply0]);
+        const altUser = buildAlternateUser(
+          writerHistory.length ? writerHistory : history,
+          body.regen ? [reply0, ...priorProposals] : [reply0],
+        );
         const raws = await Promise.all([
           completeChat({ system, userText: altUser, imageDataUrl }).catch(() => ""),
           completeChat({ system, userText: altUser, imageDataUrl }).catch(() => ""),
